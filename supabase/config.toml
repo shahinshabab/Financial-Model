@@ -1,0 +1,3 @@
+# Supabase CLI project config. Only the migrations in supabase/migrations are used by
+# the deploy workflow (`supabase db push`); local-dev settings use CLI defaults.
+project_id = "financial-model"
