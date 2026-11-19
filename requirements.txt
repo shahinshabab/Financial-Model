@@ -1,0 +1,6 @@
+streamlit>=1.51
+plotly>=5.22
+pandas>=2.2
+pydantic>=2.7
+supabase>=2.5
+openai>=1.66
