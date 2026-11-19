@@ -186,14 +186,12 @@ def sidebar(repo, model: dict | None) -> None:
             st.rerun()
 
 
-def _connection_help(exc: Exception) -> None:
-    """Explains the most common Supabase setup problems instead of showing a raw traceback."""
-    st.session_state.pop("_repo", None)
+def _explain_supabase_error(exc: Exception) -> None:
+    """Shows a plain-language reason for the most common Supabase setup problems."""
     code = str(getattr(exc, "code", "") or "")
     message = str(getattr(exc, "message", "") or exc)
-    text = f"{code} {message}".lower()
-    st.title("Business Financial Model")
-    st.error("Couldn't load your data from Supabase.")
+    details = str(getattr(exc, "details", "") or "")
+    text = f"{code} {message} {details}".lower()
     if code in ("PGRST205", "42P01") or "could not find the table" in text or "does not exist" in text:
         st.markdown(
             "**The database tables don't exist yet.** Run the migration: either re-run the "
@@ -202,15 +200,39 @@ def _connection_help(exc: Exception) -> None:
         )
     elif code == "22P02" or "invalid input syntax for type uuid" in text:
         st.markdown("**`SUPABASE_USER_ID` is not a valid UUID.** Copy your user's UID from Supabase → Authentication → Users.")
+    elif code == "23503" or "foreign key" in text:
+        st.markdown(
+            "**`SUPABASE_USER_ID` doesn't match any user in this Supabase project.** Open Supabase → "
+            "Authentication → Users, create a user if there is none (Add user → Create new user), copy its "
+            "**UID** and put it in `SUPABASE_USER_ID` in your Streamlit secrets."
+        )
+    elif code == "42501" or "permission denied" in text or "row-level security" in text:
+        st.markdown(
+            "**Row level security blocked the save.** With `SUPABASE_USER_ID` set, `SUPABASE_KEY` must be the "
+            "`service_role` key (Project Settings → API Keys), not the `anon` / publishable key. Or remove "
+            "`SUPABASE_USER_ID` and keep the `anon` key to use the sign-in page."
+        )
     elif "jwt" in text or "api key" in text or "apikey" in text or code in ("401", "PGRST301"):
         st.markdown("**`SUPABASE_KEY` was rejected.** Use the `service_role` key (or `anon` key) from Project Settings → API.")
-    elif code == "42501" or "permission denied" in text or "row-level security" in text:
-        st.markdown("**Permission denied.** With `SUPABASE_USER_ID` set, use the `service_role` key, not the `anon` key.")
     else:
         st.markdown("Check `SUPABASE_URL`, `SUPABASE_KEY` and `SUPABASE_USER_ID` in your Streamlit secrets.")
-    st.caption(f"Details: {code} {message}"[:500])
+    st.caption(f"Details: {code} {message} {details}"[:500])
+
+
+def _connection_help(exc: Exception) -> None:
+    """Explains why the data couldn't be loaded instead of showing a raw traceback."""
+    st.session_state.pop("_repo", None)
+    st.title("Business Financial Model")
+    st.error("Couldn't load your data from Supabase.")
+    _explain_supabase_error(exc)
     if st.button("Try again", type="primary"):
         st.rerun()
+
+
+def database_error(exc: Exception) -> None:
+    """Shown when a save or load fails while using a page."""
+    st.error("Supabase refused this request.")
+    _explain_supabase_error(exc)
 
 
 def page_setup(title_parts: list[str] | None = None, require_model: bool = True):

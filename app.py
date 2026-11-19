@@ -4,6 +4,7 @@ Run with:  streamlit run app.py
 """
 
 import streamlit as st
+from postgrest.exceptions import APIError
 
 from fm import ui
 
@@ -26,4 +27,7 @@ _pages = {
 }
 ui.PAGES.update(_pages)
 
-st.navigation(list(_pages.values()), position="hidden").run()
+try:
+    st.navigation(list(_pages.values()), position="hidden").run()
+except APIError as exc:  # explain Supabase errors instead of a redacted traceback
+    ui.database_error(exc)
