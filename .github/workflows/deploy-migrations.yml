@@ -44,7 +44,8 @@ jobs:
         run: supabase link --project-ref "$(echo "$PROJECT_REF" | tr -d '[:space:]')"
 
       - name: Show pending migrations
-        run: supabase migration list --linked
+        run: supabase migration list
 
       - name: Apply migrations
-        run: supabase db push --linked
+        # --yes: CI has no terminal to answer the confirmation prompt
+        run: supabase db push --yes
