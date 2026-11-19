@@ -113,15 +113,50 @@ def _month_span(a: date, b: date) -> str:
     return f"{a.strftime('%b')}–{b.strftime('%b')}"
 
 
-def sales_forecast(params: dict) -> dict:
-    """Builds Daily -> Weekly -> Quarterly -> Yearly forecast rows.
+PERIOD_DAYS = {"daily": 1, "weekly": 7, "quarterly": QUARTER_DAYS, "annual": YEAR_DAYS}
 
-    * Day n = first day x (1 + daily growth)^(n-1), for the first 7 days
-    * Week 1 = sum of those 7 days; week n grows by the weekly rate (13 weeks)
-    * Quarter = 90 days at the average day of the 13 weeks; quarter n grows by the quarterly rate
-    * Year 1 = 365 days at the average day of the 4 quarters; year n grows by the annual rate
-    * If the start date isn't 1 January, the start year is shown as a part year (e.g. only
-      December for a 1 Dec start) and the N full years follow it, from the next 1 January
+
+def active_growth(params: dict, what: str) -> tuple[str | None, float]:
+    """The one growth rate in use for `what` ('customer' or 'avt'): the first non-zero of
+    daily, weekly, quarterly, annual. Returns (period, rate %) or (None, 0)."""
+    for period in PERIOD_DAYS:
+        rate = num((params or {}).get(f"{period}_{what}_growth"))
+        if rate:
+            return period, rate
+    return None, 0.0
+
+
+def daily_rate(period: str | None, rate_pct: float) -> float:
+    """Converts a growth % per period into the same growth compounded every day."""
+    if not period or not rate_pct:
+        return 0.0
+    return (1 + rate_pct / 100) ** (1 / PERIOD_DAYS[period]) - 1
+
+
+def growth_total(first: float, r: float, n: float) -> float:
+    """T = C x ((1 + r)^n - 1) / r : total of n days that start at `first` and grow r a day."""
+    if n <= 0:
+        return 0.0
+    if abs(r) < 1e-12:
+        return first * n
+    try:
+        return first * ((1 + r) ** n - 1) / r
+    except OverflowError:
+        return math.inf
+
+
+def sales_forecast(params: dict) -> dict:
+    """Forecast built from one daily growth curve.
+
+    Customers on day d = C x (1 + r)^(d-1), and the total of days 1..n is
+    T(n) = C x ((1 + r)^n - 1) / r. A period covering days a+1..b is T(b) - T(a), so every
+    week, quarter (90 days) and year (365 days) comes from the same curve.
+
+    Only one customer growth rate is used (daily, weekly, quarterly or annual, the first
+    one filled in); it is converted to a daily rate. The average value of transaction (AVT)
+    works the same way with its own rate, so daily sales grow by (1 + r)(1 + s) - 1.
+    If the start date isn't 1 January, the start year is shown as a part year and the N
+    full calendar years follow it.
     """
     p = SALES_DEFAULTS | {k: v for k, v in (params or {}).items() if v is not None}
     start = p["start_date"]
@@ -130,69 +165,58 @@ def sales_forecast(params: dict) -> dict:
     if not isinstance(start, date):
         start = date.today()
 
-    def g(key):
-        return num(p[key]) / 100
-
-    rows: list[dict] = []
+    c_period, c_rate = active_growth(p, "customer")
+    a_period, a_rate = active_growth(p, "avt")
+    r = daily_rate(c_period, c_rate)
+    s = daily_rate(a_period, a_rate)
+    rs = (1 + r) * (1 + s) - 1
     c0, a0 = num(p["first_day_customers"]), num(p["first_day_avt"])
 
-    days = []
+    def customers(n: float) -> float:
+        return growth_total(c0, r, n)
+
+    def sales(n: float) -> float:
+        return growth_total(c0 * a0, rs, n)
+
+    rows: list[dict] = []
+
+    def add(label: str, level: str, first_day: int, last_day: int) -> dict:
+        """Row for days first_day..last_day (1 = start date), as T(last) - T(first - 1)."""
+        c = customers(last_day) - customers(first_day - 1)
+        sv = sales(last_day) - sales(first_day - 1)
+        row = {"period": label, "level": level, "days": f"{first_day}-{last_day}" if last_day > first_day else str(first_day),
+               "customers": c, "avt": sv / c if c else 0.0, "sales": sv}
+        rows.append(row)
+        return row
+
     for i in range(7):
-        c = c0 * (1 + g("daily_customer_growth")) ** i
-        a = a0 * (1 + g("daily_avt_growth")) ** i
-        days.append((c, c * a))
         d = start + timedelta(days=i)
-        rows.append({"period": f"{d.strftime('%A')} ({d.strftime('%d-%m-%Y')})", "level": "day", "customers": c, "avt": a, "sales": c * a})
+        add(f"{d.strftime('%A')} ({d.strftime('%d-%m-%Y')})", "day", i + 1, i + 1)
+    for k in range(13):
+        add(f"Week {k + 1}", "week", 7 * k + 1, 7 * (k + 1))
+    for k in range(4):
+        add(f"Quarter {k + 1}", "quarter", QUARTER_DAYS * k + 1, QUARTER_DAYS * (k + 1))
 
-    w_c = sum(d[0] for d in days)
-    w_s = sum(d[1] for d in days)
-    w_a = w_s / w_c if w_c else 0.0
-    weeks = []
-    for i in range(13):
-        c = w_c * (1 + g("weekly_customer_growth")) ** i
-        a = w_a * (1 + g("weekly_avt_growth")) ** i
-        weeks.append((c, c * a))
-        rows.append({"period": f"Week {i + 1}", "level": "week", "customers": c, "avt": a, "sales": c * a})
-
-    # Average day over the 13 weeks; a quarter is 90 days and a year is 365 days.
-    per_day_c = sum(w[0] for w in weeks) / 91
-    per_day_s = sum(w[1] for w in weeks) / 91
-    per_day_a = per_day_s / per_day_c if per_day_c else 0.0
-    quarters = []
-    for i in range(4):
-        c = per_day_c * QUARTER_DAYS * (1 + g("quarterly_customer_growth")) ** i
-        a = per_day_a * (1 + g("quarterly_avt_growth")) ** i
-        quarters.append((c, c * a))
-        rows.append({"period": f"Quarter {i + 1}", "level": "quarter", "customers": c, "avt": a, "sales": c * a})
-
-    # Year 1 = the average day of the four quarters x 365 days.
-    q_c = sum(q[0] for q in quarters)
-    q_s = sum(q[1] for q in quarters)
-    y_c = q_c / (4 * QUARTER_DAYS) * YEAR_DAYS
-    y_s = q_s / (4 * QUARTER_DAYS) * YEAR_DAYS
-    y_a = y_s / y_c if y_c else 0.0
-
-    # If the start date isn't 1 January, the start year is a part year: only its remaining
-    # days are counted, at the year-1 daily rate. The N full forecast years follow it.
+    day = 0
     first_full_year = start.year
     if (start.month, start.day) != (1, 1):
         part_days = min((date(start.year + 1, 1, 1) - start).days, YEAR_DAYS)
-        c = y_c * part_days / YEAR_DAYS
-        last = date(start.year, 12, 31)
-        label = f"{start.year} ({_month_span(start, last)}, {part_days} days)"
-        rows.append({"period": label, "level": "year", "customers": c, "avt": y_a, "sales": c * y_a})
+        add(f"{start.year} ({_month_span(start, date(start.year, 12, 31))}, {part_days} days)", "year", 1, part_days)
+        day = part_days
         first_full_year += 1
     for k in range(int(num(p["years"], 10)) or 10):
-        c = y_c * (1 + g("annual_customer_growth")) ** k
-        a = y_a * (1 + g("annual_avt_growth")) ** k
-        rows.append({"period": str(first_full_year + k), "level": "year", "customers": c, "avt": a, "sales": c * a})
+        add(str(first_full_year + k), "year", day + 1, day + YEAR_DAYS)
+        day += YEAR_DAYS
 
+    y_c, y_s = customers(YEAR_DAYS), sales(YEAR_DAYS)
     return {
         "rows": rows,
         "first_day_sales": c0 * a0,
         "first_year_customers": y_c,
         "first_year_sales": y_s,
         "start_date": start,
+        "customer_growth": (c_period, c_rate, r),
+        "avt_growth": (a_period, a_rate, s),
     }
 
 

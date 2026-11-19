@@ -41,7 +41,37 @@ def test_sales_forecast_starting_1_january_has_no_part_year():
                                "annual_customer_growth": 10, "years": 3})
     years = [r for r in out["rows"] if r["level"] == "year"]
     assert [y["period"] for y in years] == ["2026", "2027", "2028"]
-    assert years[1]["customers"] == pytest.approx(365 * 1.1)
+    # A yearly rate is turned into a daily one, so each year is exactly 10% above the last.
+    assert years[1]["customers"] == pytest.approx(years[0]["customers"] * 1.1)
+    assert years[2]["customers"] == pytest.approx(years[0]["customers"] * 1.21)
+
+
+def test_sales_forecast_daily_growth_uses_the_sum_formula():
+    out = calc.sales_forecast({"first_day_customers": 2, "first_day_avt": 100, "start_date": "2026-01-01",
+                               "daily_customer_growth": 1})
+    r = 0.01
+    T = lambda n: 2 * ((1 + r) ** n - 1) / r  # noqa: E731
+    rows = {x["period"]: x for x in out["rows"]}
+    assert out["rows"][1]["customers"] == pytest.approx(2 * 1.01)  # day 2
+    assert rows["Week 1"]["customers"] == pytest.approx(T(7))
+    assert rows["Week 2"]["customers"] == pytest.approx(T(14) - T(7))  # 2nd week only = T(14) - T(7)
+    assert rows["Quarter 2"]["customers"] == pytest.approx(T(180) - T(90))
+    assert out["first_year_customers"] == pytest.approx(T(365))
+    assert rows["2027"]["customers"] == pytest.approx(T(730) - T(365))
+
+
+def test_sales_forecast_weekly_rate_and_only_first_rate_counts():
+    out = calc.sales_forecast({"first_day_customers": 1, "first_day_avt": 1000, "start_date": "2026-01-01",
+                               "weekly_customer_growth": 10, "annual_customer_growth": 50, "weekly_avt_growth": 5})
+    rows = {x["period"]: x for x in out["rows"]}
+    assert rows["Week 2"]["customers"] == pytest.approx(rows["Week 1"]["customers"] * 1.10)
+    assert rows["Week 2"]["avt"] == pytest.approx(rows["Week 1"]["avt"] * 1.05, rel=1e-3)
+    assert out["customer_growth"][0] == "weekly"  # the annual 50% is ignored
+
+
+def test_sales_forecast_huge_growth_does_not_crash():
+    out = calc.sales_forecast({"start_date": "2026-01-01", "daily_customer_growth": 90})
+    assert out["rows"]
 
 
 def test_cogs_table():
