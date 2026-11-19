@@ -49,8 +49,10 @@ editable table, untick what you don't want, and add the rest.
    ```bash
    pip install -r requirements.txt
    ```
-2. **Create the tables in Supabase.** Open your project → SQL Editor → New query, paste
-   [`supabase/schema.sql`](supabase/schema.sql) and run it.
+2. **Create the tables in Supabase.** Either let GitHub do it (see
+   [Database migrations](#database-migrations-auto-deploy) below), or open your project → SQL Editor → New query, paste
+   [`supabase/migrations/20261119000000_initial_schema.sql`](supabase/migrations/20261119000000_initial_schema.sql)
+   and run it. The SQL is safe to run more than once.
 3. **Add your credentials.** Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` (git-ignored) and fill it
    in. Environment variables with the same names also work.
    - `SUPABASE_URL`: Project Settings → API → Project URL.
@@ -68,6 +70,31 @@ editable table, untick what you don't want, and add the rest.
 
 Without Supabase credentials the app runs in a local demo mode that saves to `data/local_db.json`, which is handy for
 trying it out.
+
+## Database migrations (auto-deploy)
+
+Database changes live in `supabase/migrations/` as timestamped SQL files. The GitHub Action
+[`deploy-migrations.yml`](.github/workflows/deploy-migrations.yml) runs `supabase db push` whenever a change to that
+folder is merged into `main`, so new tables or columns reach your Supabase project automatically. You can also run it
+by hand from the **Actions** tab (**Deploy Supabase migrations → Run workflow**).
+
+One-time setup, in GitHub → repository **Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Where to find it |
+|---|---|
+| `SUPABASE_ACCESS_TOKEN` | supabase.com → your avatar → **Account preferences → Access Tokens → Generate new token** |
+| `SUPABASE_PROJECT_ID` | Project **Settings → General → Project ID** (the `xxxx` in `https://xxxx.supabase.co`) |
+| `SUPABASE_DB_PASSWORD` | The database password you set when creating the project (reset it under **Settings → Database** if needed) |
+
+To change the schema later:
+
+```bash
+# install the CLI: https://supabase.com/docs/guides/cli
+supabase migration new add_something      # creates supabase/migrations/<timestamp>_add_something.sql
+# write the SQL in that file, commit, open a PR, merge into main -> the Action applies it
+```
+
+Never edit a migration that has already been applied; add a new one instead.
 
 ## Tests
 
@@ -89,5 +116,5 @@ fm/db.py            Supabase repository (+ local JSON fallback)
 fm/ai.py            OpenAI prompts and Pydantic schemas
 fm/ui.py            sidebar, shared forms, Generate popups
 fm/charts.py        Plotly donuts and the click-to-open bridge
-supabase/schema.sql database schema with RLS
+supabase/migrations/   database schema (RLS), auto-deployed by GitHub Actions
 ```
