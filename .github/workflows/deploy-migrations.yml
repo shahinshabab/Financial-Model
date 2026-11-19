@@ -44,8 +44,9 @@ jobs:
         run: supabase link --project-ref "$(echo "$PROJECT_REF" | tr -d '[:space:]')"
 
       - name: Show pending migrations
-        run: supabase migration list
+        run: supabase migration list --remote
 
       - name: Apply migrations
+        # --remote: the linked Supabase project (not a local Docker stack)
         # --yes: CI has no terminal to answer the confirmation prompt
-        run: supabase db push --yes
+        run: supabase db push --remote --yes
