@@ -227,7 +227,7 @@ def _parse(system: str, user: str, schema: type[BaseModel]) -> BaseModel:
 
 def _context(description: str, business: str, model_name: str) -> str:
     return (
-        f"Business name: {business or '-'}\n"
+        ""
         f"Project / financial model: {model_name or '-'}\n"
         f"Business description:\n{description.strip()}\n"
     )

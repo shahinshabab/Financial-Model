@@ -115,21 +115,20 @@ def sidebar(repo, model: dict | None) -> None:
         with st.popover("➕ Create new financial model", width="stretch"):
             with st.form("new_model", clear_on_submit=True):
                 name = st.text_input("Model / project name", placeholder="e.g. Techno Lab")
-                business = st.text_input("Business name", placeholder="e.g. DemoBiz")
                 year = st.number_input("First financial year starts", min_value=2000, max_value=2100, value=2026, step=1)
                 desc = st.text_area("Business description (used by AI Generate)", placeholder="What does the business do, where, for whom, at what scale?")
                 if st.form_submit_button("Create", type="primary"):
                     if not name.strip():
                         st.error("Enter a model name.")
                     else:
-                        m = repo.create_model(name=name.strip(), business_name=business.strip(), start_year=int(year), business_description=desc.strip())
+                        m = repo.create_model(name=name.strip(), start_year=int(year), business_description=desc.strip())
                         st.session_state["model_id"] = m["id"]
                         go("home")
 
         models = repo.list_models()
         if models:
             ids = [m["id"] for m in models]
-            names = {m["id"]: f"{m['name']}" + (f" · {m['business_name']}" if m.get("business_name") else "") for m in models}
+            names = {m["id"]: m["name"] for m in models}
             idx = ids.index(model["id"]) if model and model["id"] in ids else 0
             chosen = st.radio("Your models", ids, index=idx, format_func=lambda i: names[i], key=f"model_pick_{idx}_{len(ids)}")
             if model is None or chosen != model["id"]:
@@ -166,11 +165,10 @@ def sidebar(repo, model: dict | None) -> None:
             with st.expander("Model settings"):
                 with st.form("edit_model"):
                     name = st.text_input("Model name", model["name"])
-                    business = st.text_input("Business name", model.get("business_name", ""))
                     year = st.number_input("First financial year starts", 2000, 2100, int(model.get("start_year") or 2026))
                     desc = st.text_area("Business description", model.get("business_description", ""), height=140)
                     if st.form_submit_button("Save"):
-                        repo.update_model(model["id"], name=name, business_name=business, start_year=int(year), business_description=desc)
+                        repo.update_model(model["id"], name=name, start_year=int(year), business_description=desc)
                         st.rerun()
                 with st.popover("🗑️ Delete this model"):
                     st.warning("This deletes the model and all its data.")
@@ -202,10 +200,7 @@ def page_setup(title_parts: list[str] | None = None, require_model: bool = True)
         st.stop()
     snap = snapshot(repo, model) if model else None
     if model:
-        crumb = ["Business Financial Model"]
-        if model.get("business_name"):
-            crumb.append(model["business_name"])
-        crumb.append(model["name"])
+        crumb = ["Business Financial Model", model["name"]]
         crumb += title_parts or []
         html = " / ".join(crumb[:-1]) + f" / <b>{crumb[-1]}</b>"
         st.markdown(f"<div class='fm-crumb'>{html}</div>", unsafe_allow_html=True)
@@ -232,58 +227,88 @@ def show_flash() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Editable rows helpers: "+ Add row" creates an unsaved row, "Remove" deletes a row,
+# "Save all" writes every changed or new row in one go.
+# ---------------------------------------------------------------------------
+def _pending(key: str) -> list[str]:
+    return st.session_state.setdefault(key, [])
+
+
+def _new_row(key: str) -> None:
+    import uuid
+
+    _pending(key).append(uuid.uuid4().hex[:8])
+
+
+# ---------------------------------------------------------------------------
 # Category list (Fixed Assets / Pre-Operating / Operating / COGS main pages)
 # ---------------------------------------------------------------------------
 def category_list(repo, model: dict, snap: dict, section: str, *, flags: bool = False, total_label: str = "CATEGORY TOTAL (₹)") -> None:
     cats = snap["categories"][section]
-    widths = [3.4, 0.9, 0.9, 1, 1.9, 1, 1.2] if flags else [5, 1.1, 2.4, 1, 1]
-    cols = st.columns(widths, vertical_alignment="center")
-    labels = ["Category", "Add to P&L", "Add to BE", "", total_label, "", ""] if flags else ["Category", "", total_label, "", ""]
-    head(cols, labels)
+    pkey = f"pending_cats_{section}_{model['id']}"
+    pending = _pending(pkey)
+    widths = [3.4, 0.9, 0.9, 1, 1.9, 1.3] if flags else [5, 1.1, 2.4, 1.3]
+    labels = ["Category", "Add to P&L", "Add to BE", "", total_label, ""] if flags else ["Category", "", total_label, ""]
+    head(st.columns(widths, vertical_alignment="center"), labels)
 
-    with st.form(f"add_cat_{section}", clear_on_submit=True, border=False):
-        cols = st.columns(widths, vertical_alignment="bottom")
-        new_name = cols[0].text_input("Category", placeholder="Enter Category Name", label_visibility="collapsed")
-        new_pl = cols[1].checkbox("P&L", value=True, key=f"new_pl_{section}", label_visibility="collapsed") if flags else False
-        new_be = cols[2].checkbox("BE", value=section == "operating", key=f"new_be_{section}", label_visibility="collapsed") if flags else False
-        if cols[-2].form_submit_button("Save", type="primary", width="stretch"):
-            if new_name.strip():
-                repo.add_category(model["id"], section, new_name.strip(), add_to_pl=bool(new_pl), add_to_be=bool(new_be), sort_order=len(cats))
-                flash(f"Added {new_name.strip()}")
-                st.rerun()
-            else:
-                st.warning("Enter a category name.")
-
-    for c in cats:
+    def row(row_key: str, name: str, pl: bool, be: bool, saved: dict | None):
         cols = st.columns(widths, vertical_alignment="center")
-        name = cols[0].text_input("Name", c["name"], key=f"cat_name_{c['id']}", label_visibility="collapsed")
+        n = cols[0].text_input("Name", name, key=f"cat_name_{row_key}", placeholder="Enter Category Name", label_visibility="collapsed")
+        p = b = False
         if flags:
-            pl = cols[1].checkbox("P&L", bool(c.get("add_to_pl")), key=f"cat_pl_{c['id']}", label_visibility="collapsed")
-            be = cols[2].checkbox("BE", bool(c.get("add_to_be")), key=f"cat_be_{c['id']}", label_visibility="collapsed")
-            view_col, total_col = cols[3], cols[4]
+            p = cols[1].checkbox("P&L", pl, key=f"cat_pl_{row_key}", label_visibility="collapsed")
+            b = cols[2].checkbox("BE", be, key=f"cat_be_{row_key}", label_visibility="collapsed")
+        view_col, total_col = (cols[3], cols[4]) if flags else (cols[1], cols[2])
+        if saved:
+            if view_col.button("View", key=f"cat_view_{row_key}", width="stretch"):
+                open_category(section, saved["id"])
+            cell(total_col, inr(saved["total"]))
+            with cols[-1].popover("✕ Remove", width="stretch"):
+                st.write(f"Remove **{saved['name']}** and all its sub-categories?")
+                if st.button("Confirm remove", key=f"cat_del_{row_key}", type="primary"):
+                    repo.delete_category(saved["id"])
+                    flash("Row removed")
+                    st.rerun()
         else:
-            pl = be = None
-            view_col, total_col = cols[1], cols[2]
-        if view_col.button("View", key=f"cat_view_{c['id']}", width="stretch"):
-            open_category(section, c["id"])
-        cell(total_col, inr(c["total"]))
-        if cols[-2].button("Update", key=f"cat_upd_{c['id']}", width="stretch"):
-            fields = {"name": name.strip() or c["name"]}
-            if flags:
-                fields |= {"add_to_pl": bool(pl), "add_to_be": bool(be)}
-            repo.update_category(c["id"], **fields)
-            flash("Category updated")
-            st.rerun()
-        with cols[-1].popover("Delete", width="stretch"):
-            st.write(f"Delete **{c['name']}** and all its sub-categories?")
-            if st.button("Confirm delete", key=f"cat_del_{c['id']}", type="primary"):
-                repo.delete_category(c["id"])
-                flash("Category deleted")
+            cell(total_col, "<span style='color:#888'>new row</span>")
+            if cols[-1].button("✕ Remove", key=f"cat_rm_{row_key}", width="stretch"):
+                pending.remove(row_key)
                 st.rerun()
+        return n.strip(), bool(p), bool(b)
+
+    edits = []
+    for c in cats:
+        edits.append((c, *row(c["id"], c["name"], bool(c.get("add_to_pl")), bool(c.get("add_to_be")), c)))
+    new_rows = []
+    for rk in list(pending):
+        new_rows.append((rk, *row(rk, "", True, section == "operating", None)))
 
     cols = st.columns(widths)
-    cell(cols[-4] if flags else cols[1], "TOTAL AMOUNT", bold=True)
-    cell(cols[-3], inr(snap["section_totals"][section]), bold=True)
+    cell(cols[3] if flags else cols[1], "TOTAL AMOUNT", bold=True)
+    cell(cols[4] if flags else cols[2], inr(snap["section_totals"][section]), bold=True)
+
+    a, s, _ = st.columns([1.2, 1.2, 5])
+    if a.button("➕ Add row", key=f"add_row_{section}", width="stretch"):
+        _new_row(pkey)
+        st.rerun()
+    if s.button("💾 Save", key=f"save_rows_{section}", type="primary", width="stretch"):
+        changed = 0
+        for c, n, p, b in edits:
+            fields = {}
+            if n and n != c["name"]:
+                fields["name"] = n
+            if flags and (p != bool(c.get("add_to_pl")) or b != bool(c.get("add_to_be"))):
+                fields |= {"add_to_pl": p, "add_to_be": b}
+            if fields:
+                repo.update_category(c["id"], **fields)
+                changed += 1
+        for rk, n, p, b in new_rows:
+            if n:
+                repo.add_category(model["id"], section, n, add_to_pl=p, add_to_be=b, sort_order=len(cats) + changed)
+                changed += 1
+            pending.remove(rk)
+        flash(f"Saved {changed} row(s)")
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -294,52 +319,57 @@ def item_table(repo, model: dict, section: str, category: dict, items: list[dict
     measure_label = "MEASURE / UNIT" if fixed else "MEASURE / UNIT (MONTHS)"
     cost_label = "APPROX. COST (₹)" if fixed else "MONTHLY COST (₹)"
     item_label = "ASSET / ITEM" if fixed else "ASSET / ITEM / ROLE"
-    widths = [1.6, 1.8, 1.3, 0.8, 1.3, 1.4, 1.4, 0.95, 0.95]
-    head(st.columns(widths), ["Sub-category", item_label, measure_label, "Qty", cost_label, "Amount (₹)", "Remarks", "", ""])
+    pkey = f"pending_items_{category['id']}"
+    pending = _pending(pkey)
+    widths = [1.6, 1.8, 1.3, 0.8, 1.3, 1.4, 1.4, 1.2]
+    head(st.columns(widths), ["Sub-category", item_label, measure_label, "Qty", cost_label, "Amount (₹)", "Remarks", ""])
 
-    total = 0.0
-    for it in items:
-        k = it["id"]
+    def row(k: str, it: dict, saved: bool):
         cols = st.columns(widths, vertical_alignment="center")
-        sub = cols[0].text_input("sub", it["sub_category"], key=f"it_sub_{k}", label_visibility="collapsed")
-        name = cols[1].text_input("item", it["item"], key=f"it_item_{k}", label_visibility="collapsed")
-        measure = cols[2].text_input("measure", str(it.get("measure_unit") or ""), key=f"it_meas_{k}", label_visibility="collapsed")
+        sub = cols[0].text_input("sub", it.get("sub_category", ""), key=f"it_sub_{k}", placeholder="Enter Sub-Category", label_visibility="collapsed")
+        name = cols[1].text_input("item", it.get("item", ""), key=f"it_item_{k}", placeholder=f"Enter {item_label.title()}", label_visibility="collapsed")
+        measure = cols[2].text_input("measure", str(it.get("measure_unit") or ""), key=f"it_meas_{k}",
+                                     placeholder="Enter Measure / Unit" if fixed else "Months, e.g. 1", label_visibility="collapsed")
         qty = cols[3].number_input("qty", value=float(num(it.get("qty"), 1)), min_value=0.0, key=f"it_qty_{k}", label_visibility="collapsed")
         cost = cols[4].number_input("cost", value=float(num(it.get("unit_cost"))), min_value=0.0, step=100.0, key=f"it_cost_{k}", label_visibility="collapsed")
         amount = calc.item_amount(section, measure, qty, cost)
-        total += num(it.get("amount"))
         cell(cols[5], inr(amount))
-        remarks = cols[6].text_input("remarks", it.get("remarks") or "", key=f"it_rem_{k}", label_visibility="collapsed")
-        if cols[7].button("Update", key=f"it_upd_{k}", width="stretch"):
-            repo.update_item(k, sub_category=sub, item=name, measure_unit=measure, qty=qty, unit_cost=cost, amount=amount, remarks=remarks)
-            flash("Item updated")
-            st.rerun()
-        if cols[8].button("Delete", key=f"it_del_{k}", width="stretch"):
-            repo.delete_item(k)
-            flash("Item deleted")
-            st.rerun()
-
-    with st.form(f"add_item_{category['id']}", clear_on_submit=True, border=False):
-        cols = st.columns(widths, vertical_alignment="bottom")
-        sub = cols[0].text_input("sub", placeholder="Enter Sub-Category", label_visibility="collapsed")
-        name = cols[1].text_input("item", placeholder=f"Enter {item_label.title()}", label_visibility="collapsed")
-        measure = cols[2].text_input("measure", placeholder="Enter Measure / Unit" if fixed else "Months, e.g. 1", label_visibility="collapsed")
-        qty = cols[3].number_input("qty", value=1.0, min_value=0.0, label_visibility="collapsed")
-        cost = cols[4].number_input("cost", value=0.0, min_value=0.0, step=100.0, label_visibility="collapsed")
-        cell(cols[5], "<span style='color:#888'>auto</span>")
-        remarks = cols[6].text_input("remarks", placeholder="Enter Remarks", label_visibility="collapsed")
-        if cols[7].form_submit_button("Save", type="primary", width="stretch"):
-            if not (sub.strip() or name.strip()):
-                st.warning("Enter a sub-category or item.")
+        remarks = cols[6].text_input("remarks", it.get("remarks") or "", key=f"it_rem_{k}", placeholder="Enter Remarks", label_visibility="collapsed")
+        if cols[7].button("✕ Remove", key=f"it_del_{k}", width="stretch"):
+            if saved:
+                repo.delete_item(k)
+                flash("Row removed")
             else:
-                repo.add_item(model["id"], category["id"], sub_category=sub.strip(), item=name.strip(), measure_unit=measure.strip() or ("" if fixed else "1"),
-                              qty=qty, unit_cost=cost, amount=calc.item_amount(section, measure, qty, cost), remarks=remarks.strip())
-                flash("Item added")
-                st.rerun()
+                pending.remove(k)
+            st.rerun()
+        return {"sub_category": sub.strip(), "item": name.strip(), "measure_unit": measure.strip() or ("" if fixed else "1"),
+                "qty": qty, "unit_cost": cost, "amount": amount, "remarks": remarks.strip()}
+
+    edits = [(it, row(it["id"], it, True)) for it in items]
+    new_rows = [(k, row(k, {"qty": 1}, False)) for k in list(pending)]
+    total = sum(v["amount"] for _, v in edits)
 
     cols = st.columns(widths)
     cell(cols[4], "CATEGORY TOTAL", bold=True)
     cell(cols[5], inr(total), bold=True)
+
+    a, s, _ = st.columns([1.2, 1.2, 5])
+    if a.button("➕ Add row", key=f"add_item_row_{category['id']}", width="stretch"):
+        _new_row(pkey)
+        st.rerun()
+    if s.button("💾 Save", key=f"save_items_{category['id']}", type="primary", width="stretch"):
+        n = 0
+        for it, v in edits:
+            if any(str(v[f]) != str(it.get(f) if f not in ("qty", "unit_cost", "amount") else num(it.get(f))) for f in v):
+                repo.update_item(it["id"], **v)
+                n += 1
+        for k, v in new_rows:
+            if v["sub_category"] or v["item"]:
+                repo.add_item(model["id"], category["id"], **v)
+                n += 1
+            pending.remove(k)
+        flash(f"Saved {n} row(s)")
+        st.rerun()
     return total
 
 

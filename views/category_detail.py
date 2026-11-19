@@ -19,7 +19,7 @@ if not category or category["model_id"] != model["id"]:
 section = category["section"]
 
 back, title, gen = st.columns([1, 4, 1.4], vertical_alignment="center")
-if back.button(f"← {SECTION_LABELS[section]}", width="stretch"):
+if back.button("← Back", width="stretch"):
     ui.go(section)
 items = [i for i in snap["items"] if i["category_id"] == category["id"]]
 if gen.button("✨ Generate sub-categories", width="stretch", disabled=not ui.openai_configured(),

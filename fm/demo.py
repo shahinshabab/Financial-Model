@@ -31,7 +31,6 @@ COGS = [("3D Printing", 10), ("Raw Materials", 30)]
 def create_demo(repo) -> dict:
     m = repo.create_model(
         name="Techno Lab",
-        business_name="DemoBiz",
         start_year=2026,
         business_description="Techno Lab is a 3D printing and electronics prototyping lab in Kochi, Kerala that builds "
         "products for startups and runs research & development projects for students.",

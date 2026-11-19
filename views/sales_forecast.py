@@ -14,7 +14,12 @@ p = snap["sales_settings"]
 sales = snap["sales"]
 
 st.subheader("Sales Forecast")
-with st.form("sales_params"):
+# Give every input label the same height so all inputs in a row sit on one line.
+st.markdown(
+    "<style>.st-key-sf_inputs [data-testid='stWidgetLabel']{min-height:2.9rem;display:flex;align-items:flex-end;}</style>",
+    unsafe_allow_html=True,
+)
+with st.form("sales_params"), st.container(key="sf_inputs"):
     rates = [
         ("daily_customer_growth", "Daily Customer Growth Rate (%)"),
         ("daily_avt_growth", "Daily Average Value of Transaction Growth Rate (%)"),

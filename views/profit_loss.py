@@ -117,27 +117,90 @@ def line(label, values, show_pct=True, fmt=inr):
     return r
 
 
+# "rate" is the editable column: growth % for ticked Operating items, % of revenue for
+# direct expenses / COCO, tax rate for taxation and the valuation multiple.
+has_cogs = bool(snap["categories"]["cogs"])
 table = [
     line("Revenue from operations", pl["revenue"], show_pct=False),
     line("Other income", pl["other_income"], show_pct=False),
     line("Total Income", pl["total_income"], show_pct=False),
-    line("Less: Direct Expenses", pl["direct"]),
-    line("COCO RS Sharing", pl["coco"]),
+    line("Less: Direct Expenses", pl["direct"]) | {"rate": snap["direct_pct"], "_edit": ("direct", None)},
+    line("COCO RS Sharing", pl["coco"]) | {"rate": num(settings["coco_pct"]), "_edit": ("coco", None)},
     line("Contribution (Gross Profit)", pl["contribution"]),
     {"Particulars": "Less: Indirect / Fixed Expenses"},
 ]
-table += [line(f"{r['name']}", r["values"]) for r in pl["indirect"]]
+for r in pl["indirect"]:
+    row = line(r["name"], r["values"])
+    if not r["one_time"]:
+        row |= {"rate": r["growth_pct"], "_edit": ("growth", r["id"])}
+    table.append(row)
 table += [
     line("Depreciation", pl["depreciation"]),
     line("Profit before taxation", pl["pbt"]),
-    line("Taxation", pl["tax"]),
+    line("Taxation", pl["tax"]) | {"rate": num(settings["tax_rate_pct"]), "_edit": ("tax", None)},
     line("Profit after taxation", pl["pat"]),
     {"Particulars": "ROI (%)", **{y: pct(v) for y, v in zip(years, pl["roi"])}, "%": ""},
-    {"Particulars": f"Minimum Valuation ({num(settings['valuation_multiple']):g}x PAT)", **{y: inr(v) for y, v in zip(years, pl["valuation"])}, "%": ""},
+    {"Particulars": "Minimum Valuation (× PAT)", **{y: inr(v) for y, v in zip(years, pl["valuation"])}, "%": "",
+     "rate": num(settings["valuation_multiple"]), "_edit": ("multiple", None)},
 ]
-df = pd.DataFrame(table).fillna("")
-df = df[["Particulars", years[0], "%"] + years[1:]]
-st.dataframe(df, hide_index=True, width="stretch", height=40 + 35 * len(df))
+edit_map = [r.get("_edit") for r in table]
+df = pd.DataFrame([{k: v for k, v in r.items() if k != "_edit"} for r in table])
+df["rate"] = df["rate"].map(lambda v: "" if pd.isna(v) else f"{float(v):g}")
+for col in ["%", *years]:
+    df[col] = df[col].fillna("")
+df = df[["Particulars", "rate", years[0], "%"] + years[1:]]
+
+ver = st.session_state.setdefault("pl_editor_ver", 0)
+st.caption("✏️ Edit the **Rate** column: yearly growth % of each Operating item ticked *Add to P&L*, direct expenses and "
+           "COCO % of revenue, tax rate %, and the valuation multiple. The forecast cells recalculate as soon as you press Enter.")
+edited = st.data_editor(
+    df,
+    key=f"pl_editor_{ver}",
+    hide_index=True,
+    width="stretch",
+    height=40 + 35 * len(df),
+    disabled=[c for c in df.columns if c != "rate"],
+    column_config={
+        "rate": st.column_config.TextColumn("Rate ✏️", help="Growth % / % of revenue / tax % / multiple", width="small"),
+        "Particulars": st.column_config.TextColumn("Particulars", width="medium"),
+    },
+)
+changes = {}
+reset = False
+for i, target in enumerate(edit_map):
+    new_v, old_v = str(edited["rate"].iloc[i] or "").strip().rstrip("%"), df["rate"].iloc[i]
+    if new_v == old_v:
+        continue
+    if target is None:
+        reset = True  # rows without a rate are not editable: undo the edit
+        continue
+    try:
+        changes[target] = max(float(new_v or 0), 0.0)
+    except ValueError:
+        reset = True
+if reset and not changes:
+    st.session_state["pl_editor_ver"] = ver + 1
+    st.rerun()
+if changes:
+    upd = {}
+    for (kind, cid), v in changes.items():
+        if kind == "growth":
+            repo.update_category(cid, pl_growth_pct=v)
+        elif kind == "direct":
+            if has_cogs:
+                ui.flash("Direct expenses % comes from the COGS page; change it there.")
+            else:
+                upd["direct_expense_pct"] = v
+        elif kind == "coco":
+            upd["coco_pct"] = v
+        elif kind == "tax":
+            upd["tax_rate_pct"] = v
+        elif kind == "multiple":
+            upd["valuation_multiple"] = v
+    if upd:
+        save(**upd)
+    st.session_state["pl_editor_ver"] = ver + 1
+    st.rerun()
 st.caption(
     f"Direct expenses = {pct(snap['direct_pct'])} of revenue "
     + ("(from COGS)." if snap["categories"]["cogs"] else "(set below; add COGS categories to derive it).")
