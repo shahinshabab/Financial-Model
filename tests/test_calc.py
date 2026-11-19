@@ -22,11 +22,29 @@ def test_depreciation_matches_fixed_asset_page():
 def test_sales_forecast_flat():
     out = calc.sales_forecast({"first_day_customers": 1, "first_day_avt": 1000, "start_date": "2026-12-01"})
     rows = out["rows"]
-    assert rows[0]["period"] == "Tuesday"
-    assert out["first_year_customers"] == pytest.approx(336)
+    assert rows[0]["period"].startswith("Tuesday")
+    # 1 Dec 2026 - 30 Nov 2027 is 365 days at 1 customer a day
+    assert out["first_year_customers"] == pytest.approx(365)
     week1 = next(r for r in rows if r["period"] == "Week 1")
     assert week1["sales"] == pytest.approx(7000)
-    assert rows[-1]["period"] == "2035"
+    quarters = [r for r in rows if r["level"] == "quarter"]
+    assert [round(q["customers"]) for q in quarters] == [90, 92, 92, 91]  # Dec-Feb, Mar-May, Jun-Aug, Sep-Nov
+    years = [r for r in rows if r["level"] == "year"]
+    # Only December counts in 2026; the 10th forecast year ends in Nov 2036.
+    assert years[0]["period"].startswith("2026 (Dec")
+    assert years[0]["customers"] == pytest.approx(31)
+    assert years[1]["period"] == "2027" and years[1]["customers"] == pytest.approx(365)
+    assert years[-1]["period"].startswith("2036 (Jan–Nov")
+    assert [round(y["customers"]) for y in years[1:4]] == [365, 366, 365]  # 2028 is a leap year
+    assert years[-1]["customers"] == pytest.approx(335)
+
+
+def test_sales_forecast_growth_split_by_calendar_year():
+    out = calc.sales_forecast({"first_day_customers": 1, "first_day_avt": 1000, "start_date": "2026-01-01",
+                               "annual_customer_growth": 10, "years": 3})
+    years = [r for r in out["rows"] if r["level"] == "year"]
+    assert [y["period"] for y in years] == ["2026", "2027", "2028"]
+    assert years[1]["customers"] == pytest.approx(365 * 1.1)
 
 
 def test_cogs_table():
