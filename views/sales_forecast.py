@@ -41,9 +41,8 @@ with st.form("sales_params"), st.container(key="sf_inputs"):
     cols[2].text_input("First Day Sales", inr(values["first_day_customers"] * values["first_day_avt"]), disabled=True)
     start = cols[3].date_input("Date", value=date.fromisoformat(str(p.get("start_date"))[:10]), format="DD-MM-YYYY")
     c = st.columns(4)
-    values["years"] = c[0].number_input("Years to forecast", value=int(num(p.get("years"), 10)), min_value=1, max_value=30)
-    values["weeks_per_quarter"] = c[1].number_input("Weeks per quarter", value=int(num(p.get("weeks_per_quarter"), 12)), min_value=1, max_value=14,
-                                                    help="The design uses 12 weeks per quarter (336 customers a year at 1 per day).")
+    values["years"] = c[0].number_input("Years to forecast", value=int(num(p.get("years"), 10)), min_value=1, max_value=30,
+                                        help="Full calendar years. If the start date isn't 1 January, the rest of the start year is shown first as a part year.")
     if st.form_submit_button("Update", type="primary"):
         values["start_date"] = start.isoformat()
         repo.save_setting(model["id"], "sales_forecast", values)
@@ -51,10 +50,12 @@ with st.form("sales_params"), st.container(key="sf_inputs"):
         st.rerun()
 
 m = st.columns(3)
-m[0].metric("Total # of customers, 1st year", f"{sales['first_year_customers']:,.0f}")
-m[1].metric("1st year sales", inr(sales["first_year_sales"]))
+m[0].metric("Total # of customers, 1st full year", f"{sales['first_year_customers']:,.0f}")
+m[1].metric("Sales, 1st full year", inr(sales["first_year_sales"]))
 m[2].metric("Average value of transaction", inr(sales["first_year_sales"] / sales["first_year_customers"] if sales["first_year_customers"] else 0))
-st.caption("The 1st-year customer count feeds the channel-wise forecast on the Profit & Loss page.")
+st.caption("A quarter is 90 days and a year is 365 days. If the start date isn't 1 January, the start year only counts "
+           "its remaining days, and the full forecast years follow it. "
+           "The first full year's customer count feeds the channel-wise forecast on the Profit & Loss page.")
 
 df = pd.DataFrame(sales["rows"])
 table = pd.DataFrame({
