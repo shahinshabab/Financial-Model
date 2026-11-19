@@ -23,23 +23,20 @@ def test_sales_forecast_flat():
     out = calc.sales_forecast({"first_day_customers": 1, "first_day_avt": 1000, "start_date": "2026-12-01"})
     rows = out["rows"]
     assert rows[0]["period"].startswith("Tuesday")
-    # 1 Dec 2026 - 30 Nov 2027 is 365 days at 1 customer a day
     assert out["first_year_customers"] == pytest.approx(365)
     week1 = next(r for r in rows if r["period"] == "Week 1")
     assert week1["sales"] == pytest.approx(7000)
     quarters = [r for r in rows if r["level"] == "quarter"]
-    assert [round(q["customers"]) for q in quarters] == [90, 92, 92, 91]  # Dec-Feb, Mar-May, Jun-Aug, Sep-Nov
+    assert [q["customers"] for q in quarters] == pytest.approx([90] * 4)
     years = [r for r in rows if r["level"] == "year"]
-    # Only December counts in 2026; the 10th forecast year ends in Nov 2036.
+    # Only December counts in 2026, then 10 full years 2027-2036.
     assert years[0]["period"].startswith("2026 (Dec")
     assert years[0]["customers"] == pytest.approx(31)
-    assert years[1]["period"] == "2027" and years[1]["customers"] == pytest.approx(365)
-    assert years[-1]["period"].startswith("2036 (Jan–Nov")
-    assert [round(y["customers"]) for y in years[1:4]] == [365, 366, 365]  # 2028 is a leap year
-    assert years[-1]["customers"] == pytest.approx(335)
+    assert [y["period"] for y in years[1:]] == [str(y) for y in range(2027, 2037)]
+    assert all(y["customers"] == pytest.approx(365) for y in years[1:])
 
 
-def test_sales_forecast_growth_split_by_calendar_year():
+def test_sales_forecast_starting_1_january_has_no_part_year():
     out = calc.sales_forecast({"first_day_customers": 1, "first_day_avt": 1000, "start_date": "2026-01-01",
                                "annual_customer_growth": 10, "years": 3})
     years = [r for r in out["rows"] if r["level"] == "year"]

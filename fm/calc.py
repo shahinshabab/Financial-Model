@@ -102,12 +102,8 @@ SALES_DEFAULTS = {
 }
 
 
-def add_months(d: date, months: int) -> date:
-    """Same day `months` later (clamped to the month's last day)."""
-    y, m = divmod(d.month - 1 + months, 12)
-    y, m = d.year + y, m + 1
-    nxt = date(y + (m == 12), m % 12 + 1, 1)
-    return date(y, m, min(d.day, (nxt - timedelta(days=1)).day))
+QUARTER_DAYS = 90
+YEAR_DAYS = 365
 
 
 def _month_span(a: date, b: date) -> str:
@@ -118,16 +114,14 @@ def _month_span(a: date, b: date) -> str:
 
 
 def sales_forecast(params: dict) -> dict:
-    """Builds Daily -> Weekly -> Quarterly -> Yearly forecast rows on the real calendar.
+    """Builds Daily -> Weekly -> Quarterly -> Yearly forecast rows.
 
     * Day n = first day x (1 + daily growth)^(n-1), for the first 7 days
-    * Week 1 = sum of those 7 days; week n grows by the weekly rate (13 weeks = 91 days)
-    * Quarter = 3 calendar months from the start date (90-92 days). Quarter 1 uses the
-      average day of the 13 weeks x its real number of days; quarter n grows by the quarterly rate
-    * Forecast year 1 = the 12 months from the start date (365 or 366 days); year n grows by
-      the annual rate
-    * The yearly table is by calendar year: a forecast starting on 1 Dec 2026 puts only
-      December's share in 2026, and the last calendar year holds the remaining months
+    * Week 1 = sum of those 7 days; week n grows by the weekly rate (13 weeks)
+    * Quarter = 90 days at the average day of the 13 weeks; quarter n grows by the quarterly rate
+    * Year 1 = 365 days at the average day of the 4 quarters; year n grows by the annual rate
+    * If the start date isn't 1 January, the start year is shown as a part year (e.g. only
+      December for a 1 Dec start) and the N full years follow it, from the next 1 January
     """
     p = SALES_DEFAULTS | {k: v for k, v in (params or {}).items() if v is not None}
     start = p["start_date"]
@@ -160,48 +154,38 @@ def sales_forecast(params: dict) -> dict:
         weeks.append((c, c * a))
         rows.append({"period": f"Week {i + 1}", "level": "week", "customers": c, "avt": a, "sales": c * a})
 
-    # Average day over the 13 weeks, used to size each calendar quarter by its real day count.
+    # Average day over the 13 weeks; a quarter is 90 days and a year is 365 days.
     per_day_c = sum(w[0] for w in weeks) / 91
     per_day_s = sum(w[1] for w in weeks) / 91
     per_day_a = per_day_s / per_day_c if per_day_c else 0.0
     quarters = []
     for i in range(4):
-        q_start, q_end = add_months(start, 3 * i), add_months(start, 3 * (i + 1))
-        n_days = (q_end - q_start).days
-        c = per_day_c * n_days * (1 + g("quarterly_customer_growth")) ** i
+        c = per_day_c * QUARTER_DAYS * (1 + g("quarterly_customer_growth")) ** i
         a = per_day_a * (1 + g("quarterly_avt_growth")) ** i
         quarters.append((c, c * a))
-        label = f"Quarter {i + 1} ({_month_span(q_start, q_end - timedelta(days=1))}, {n_days} days)"
-        rows.append({"period": label, "level": "quarter", "customers": c, "avt": a, "sales": c * a})
+        rows.append({"period": f"Quarter {i + 1}", "level": "quarter", "customers": c, "avt": a, "sales": c * a})
 
-    y_c = sum(q[0] for q in quarters)
-    y_s = sum(q[1] for q in quarters)
+    # Year 1 = the average day of the four quarters x 365 days.
+    q_c = sum(q[0] for q in quarters)
+    q_s = sum(q[1] for q in quarters)
+    y_c = q_c / (4 * QUARTER_DAYS) * YEAR_DAYS
+    y_s = q_s / (4 * QUARTER_DAYS) * YEAR_DAYS
     y_a = y_s / y_c if y_c else 0.0
 
-    # Forecast years (12 months each from the start date), then split across calendar years
-    # by the share of days that fall in each one.
-    n_years = int(num(p["years"], 10)) or 10
-    first_year_days = (add_months(start, 12) - start).days
-    calendar: dict[int, list[float]] = {}  # year -> [customers, sales, first day, last day]
-    for k in range(n_years):
-        a_k, b_k = add_months(start, 12 * k), add_months(start, 12 * (k + 1))
-        total_days = (b_k - a_k).days  # 365, or 366 when it holds 29 Feb
-        c_k = y_c * total_days / first_year_days * (1 + g("annual_customer_growth")) ** k
-        s_k = c_k * y_a * (1 + g("annual_avt_growth")) ** k
-        for year in range(a_k.year, b_k.year + 1):
-            lo, hi = max(a_k, date(year, 1, 1)), min(b_k, date(year + 1, 1, 1))
-            share = (hi - lo).days / total_days
-            if share <= 0:
-                continue
-            entry = calendar.setdefault(year, [0.0, 0.0, lo, hi])
-            entry[0] += c_k * share
-            entry[1] += s_k * share
-            entry[2], entry[3] = min(entry[2], lo), max(entry[3], hi)
-    for year, (c, s, lo, hi) in sorted(calendar.items()):
-        last = hi - timedelta(days=1)
-        full = lo == date(year, 1, 1) and last == date(year, 12, 31)
-        label = str(year) if full else f"{year} ({_month_span(lo, last)}, {(hi - lo).days} days)"
-        rows.append({"period": label, "level": "year", "customers": c, "avt": s / c if c else 0.0, "sales": s})
+    # If the start date isn't 1 January, the start year is a part year: only its remaining
+    # days are counted, at the year-1 daily rate. The N full forecast years follow it.
+    first_full_year = start.year
+    if (start.month, start.day) != (1, 1):
+        part_days = min((date(start.year + 1, 1, 1) - start).days, YEAR_DAYS)
+        c = y_c * part_days / YEAR_DAYS
+        last = date(start.year, 12, 31)
+        label = f"{start.year} ({_month_span(start, last)}, {part_days} days)"
+        rows.append({"period": label, "level": "year", "customers": c, "avt": y_a, "sales": c * y_a})
+        first_full_year += 1
+    for k in range(int(num(p["years"], 10)) or 10):
+        c = y_c * (1 + g("annual_customer_growth")) ** k
+        a = y_a * (1 + g("annual_avt_growth")) ** k
+        rows.append({"period": str(first_full_year + k), "level": "year", "customers": c, "avt": a, "sales": c * a})
 
     return {
         "rows": rows,
